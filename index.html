@@ -1,0 +1,358 @@
+<!doctype html>
+<html>
+	<head>
+		<title>PowerLearner</title>
+		<style>
+			:root {
+				font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+			}
+
+			*, *::before, *::after {
+				box-sizing: border-box;
+			}
+
+			html {
+				padding: 0;
+				margin: 0;
+				width: 100vw;
+				height: 100vh;
+				overflow: hidden;
+			}
+
+			body {
+				padding: 0;
+				margin: 0;
+				display: grid;
+				grid: "header header video" 4em
+					"explorer notes video" 1fr
+					"explorer notes pdf" 2fr
+				/ 1fr 2fr 2fr;
+				width: 100vw;
+				height: 100vh;
+				overflow: hidden;
+			}
+
+			body > section {
+				display: flex;
+				flex-direction: column;
+				max-width: 100%;
+				max-height: 100%;
+				overflow: auto;
+			}
+
+			body > *:focus, body > *:focus-within {
+				outline: 1px solid red;
+			}
+
+			section > .CodeMirror {
+				flex: 1;
+				width: 100%;
+				height: 100%;
+			}
+		</style>
+		<!-- CodeMirror -->
+		<script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/lib/codemirror.min.js"></script>
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/lib/codemirror.css">
+		<script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/mode/markdown/markdown.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/addon/dialog/dialog.js"></script> <!-- addon for vim messages -->
+		<!-- <script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/addon/search/searchcursor.js"></script> --> 
+		<script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/keymap/vim.js"></script>
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/addon/hint/show-hint.css">
+		<script src="https://cdn.jsdelivr.net/npm/codemirror@5.59.2/addon/hint/show-hint.js"></script>
+		<!-- Showdown.js -->
+		<script src="https://cdn.jsdelivr.net/npm/showdown@1.9.0/dist/showdown.min.js"></script>
+		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/katex.min.css" integrity="sha384-AfEj0r4/OFrOo5t7NnNe46zW/tFgW6x/bCJG8FqQCEo3+Aro6EYUG4+cU+KJWu/X" crossorigin="anonymous">
+		<script defer src="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/katex.min.js" integrity="sha384-g7c+Jr9ZivxKLnZTDUhnkOnsh30B4H0rpLUpJ4jAIKs4fnJI+sEnkvrMWph2EDg4" crossorigin="anonymous"></script>
+		<script defer src="https://cdn.jsdelivr.net/npm/katex@0.12.0/dist/contrib/auto-render.min.js" integrity="sha384-mll67QQFJfxn0IYznZYonOWZ644AWYC+Pt2cHqMaRhXVrursRwvLnLaebdGIlYNa" crossorigin="anonymous" onload="renderMathInElement(document.body);"></script>
+	</head>
+	<body>
+		<header style="grid-area: header;">
+			<h1>PowerLearner</h1>
+		</header>
+		<section id="explorer" style="grid-area: explorer; overflow-y: auto;">
+			<h2>File Explorer:</h2>
+			<a onclick="app.selectRootDirectory()" href="#">Select a root directory.</a>
+		</section>
+		<section id="video" style="grid-area: video;">
+			<header>
+				<h2>Video</h2>
+				<a href=""></a>
+			</header>
+			<video width="100%" height="100%" style="flex: 1;" controls></video>
+		</section>
+		<section id="pdf" style="grid-area: pdf;">
+			<header>
+				<h2>PDF</h2>
+				<a href="">file name with current position</a>
+			</header>
+			<iframe width="100%" height="100%" frameborder="0"></iframe>
+		</section>
+		<section id="notes" style="grid-area: notes; display: flex; flex-direction: column;">
+			<header>
+				<h2>Notes</h2>
+				<form>
+					<style>
+						input[type=radio] { display: none; }
+						input[type=radio]:not(:checked) + label { filter: grayscale(1); }
+						label { background-color: lightgray; }
+					</style>
+					<input id="cbEdit" type="radio" name="mode" value="edit"/><label for="cbEdit">✏️</label>
+					<input id="cbView" type="radio" name="mode" value="view" checked/><label for="cbView">👁️</label>
+				</form>
+			</header>
+			<div id="editor" style="flex: 1; height: 100%;" hidden></div>
+			<div id="viewer" style="flex: 1; height: 100%; overflow-y: auto;"></div>
+		</section>
+		<script>
+			class App {
+				constructor({ header, fileExplorer, video, pdf, notes }) {
+					this.headerSec       = header
+					this.fileExplorerSec = fileExplorer
+					this.videoSec        = video
+					this.pdfSec          = pdf
+					this.notesSec        = notes
+					this.fileIndex       = {}
+
+					this.notesFileHandle = null
+					this.notesSec.addEventListener('keydown', e => {
+						if (e.key == 's' && e.ctrlKey) {
+							e.preventDefault()
+							this.save()
+						}
+					})
+
+					this.notesSec.querySelector('form').addEventListener('change', (e => {
+						switch (e.currentTarget.mode.value) {
+							case 'edit': {
+								this.notesSec.querySelector('#editor').hidden = false
+								this.notesSec.querySelector('#viewer').hidden = true
+							} break;
+
+							case 'view': {
+								this.notesSec.querySelector('#editor').hidden = true
+								this.notesSec.querySelector('#viewer').hidden = false
+							} break;
+
+							default:
+								console.warn(`unknown notes mode '${e.currentTarget.mode}!`)
+						}
+					}).bind(this))
+	
+					// Editor
+					CodeMirror.commands.save = this.save.bind(this)
+					this.editor = CodeMirror((elem => {
+						elem.id = 'editor'
+						const editor = this.notesSec.querySelector('#editor') 
+						editor.parentNode.replaceChild(elem, editor)
+					}).bind(this), {
+						value:       "",
+						lineNumbers: true,
+						mode:        "text/markdown",
+						keyMap:      "vim",
+					})
+
+					this.notesSec.querySelector('#editor').hidden = !this.notesSec.querySelector('form').mode.value == 'edit'
+					this.notesSec.querySelector('#viewer').hidden = !this.notesSec.querySelector('form').mode.value == 'view'
+
+					// Markdown Viewer - Showdown.js
+					const viewer = this.notesSec.querySelector('#viewer')
+					document.body.addEventListener('click', (e => {
+						if (e.target.tagName == 'A' && e.target.pathname.match(/^[^(https?)(file)]/)) {
+							e.preventDefault()
+							console.info(`Navigate to: '${e.target.href}'`)
+							const path = self.decodeURI(e.target.pathname).split('/')
+							const name = path[path.length - 1]
+							const file = this.fileIndex[name]
+
+							if (file) {
+								const params = new URLSearchParams(e.target.search)
+								const hash   = Object.fromEntries(e.target.hash.split(/[#&]/g).map(e => e.split(/=/g)))
+
+								this.openFile(file.handle, { time: parseFloat(params.get('t')), page: parseInt(hash.page) })
+							}
+						}
+					}).bind(this))
+					this.markdownConverter = new showdown.Converter({
+						extensions: [],
+						tables: true
+					})
+					this.editor.on('changes', e => {
+						let content = this.editor.getValue()
+
+						// WORKAROUND: In-line math
+						const r = /(?<l>[^\$]{0,1})\$(?<i>[^\s]{0,1}[^\$]+[^\s]{0,1})\$(?<r>[^\$]{0,1})/g
+						content = content.replaceAll(r, t => {
+							    return t.replace(/^([^\$]*)\$/, '$1\\\\(').replace(/\$([^\$]*)/, '\\\\)$1')
+						})
+
+						viewer.innerHTML = this.markdownConverter.makeHtml(content)
+
+						self.renderMathInElement(viewer, [
+						  {left: "$$", right: "$$", display: false},
+						  {left: "$", right: "$", display: true},
+						  {left: "\\(", right: "\\)", display: false},
+						  {left: "\\[", right: "\\]", display: true}
+						])
+					})
+
+					// Video
+					this.videoSec.querySelector('video').addEventListener('timeupdate', (e => {
+						const video = this.videoSec.querySelector('video')
+						const info  = this.videoSec.querySelector('a')
+						this.currentTime = video.currentTime
+
+						const txt =  `${video.dataset.name} - ${this.#formatDuration(this.currentTime)}`
+						if (info.innerText != txt) {
+
+							info.innerText = txt
+							info.href = `/${video.dataset.path}?t=${this.currentTime}`
+						}
+					}).bind(this))
+				}
+
+				async selectRootDirectory() {
+					this.rootDir = await self.showDirectoryPicker()
+					this.indexDirectory(this.rootDir)
+
+					const dt = await this.#renderDirectoryTree(this.rootDir)
+					this.fileExplorerSec.appendChild(dt)
+
+					this.headerSec.querySelector('h1').innerText = this.rootDir.name
+					document.title = `PowerLearner - ${this.rootDir.name}`
+				}
+
+				async indexDirectory(dirHandle) {
+					for await (let [n, h] of dirHandle) {
+						switch (h.kind) {
+							case 'directory': {
+								await this.indexDirectory(h)
+							} break
+
+							case 'file': {
+								this.fileIndex[n] = { handle: h, path: await this.rootDir.resolve(h), url: null }
+							} break
+
+							default:
+								console.warn(`unknown file system kind '${h.kind}' of file '${n}'.`)
+						}
+					}
+				}
+
+				async #renderDirectoryTree(dirHandle) {
+					const ul = document.createElement('ul')
+
+					for await (let [n, h] of dirHandle) {
+						const li = document.createElement('li')
+
+						li.innerText    = n
+						li.title        = n
+						li.dataset.path = await this.rootDir.resolve(h)
+
+						if (h.kind == 'directory') {
+							li.appendChild(await this.#renderDirectoryTree(h))
+						} else {
+							li.addEventListener('click', async _ => await this.openFile(h))
+						}
+
+						ul.appendChild(li)
+					}
+
+					return ul
+				}
+
+				async openFile(handle, {time, page} = {time: 0, page: 1}) {
+					const f    = await handle.getFile()
+					const path = await this.rootDir.resolve(handle)
+					const fURL = URL.createObjectURL(f)
+					console.info(`Open '${handle.name}' (${f.type})`)
+
+					const [application, type] = f.type.split('/')
+					const ext = f.name.split('.').pop()
+
+					switch (application) {
+						case 'video': {
+							const video = this.videoSec.querySelector('video')
+							const info  = this.videoSec.querySelector('a')
+
+							if (video.canPlayType(f.type)) {
+								video.src = fURL
+								video.currentTime = time
+								video.dataset.path = path.join('/')
+								video.dataset.name = handle.name
+								info.innerText = `${handle.name} - ${this.#formatDuration(time)}`
+								info.href = `/${path.join('/')}?t=${time}`
+							} else {
+								console.warn(`Can not play videos of type '${f.type}'!`)
+							}
+						} break;
+
+						case 'application': {
+							switch (type) {
+								case 'pdf': {
+									const pdf  = this.pdfSec.querySelector('iframe')
+									const info = this.pdfSec.querySelector('a')
+
+									pdf.src = fURL + `#page=${page}`
+									info.innerText = `${handle.name} - ${page}`
+									info.href = `/${(await this.rootDir.resolve(handle)).join('/')}#page=${page}`
+								} break;
+
+								default: 
+									console.warn(`unknown application type '${type}'!`)
+							}
+						} break;
+
+						default: {
+							switch (ext) {
+								case 'md': {
+									this.notesFileHandle = handle
+
+									this.notesSec.querySelector('h2').innerText = `Notes - ${this.notesFileHandle.name}`
+									this.editor.setValue(await f.text())
+								} break;
+
+								default:
+									console.log(`unknown file type '${f.type}'!`)
+							}
+						}
+					}
+				}
+
+				async save() {
+					if (this.notesFileHandle == null) {
+						this.notesFileHandle = await self.showSaveFilePicker()
+						this.notesSec.querySelector('h2').innerText = `Notes - ${this.notesFileHandle.name}`
+					}
+					const wNotes = await this.notesFileHandle.createWritable()
+
+					await wNotes.write(this.editor.getValue())
+					await wNotes.close()
+					console.info(`Saved the file to ${this.notesFileHandle.name}.`)
+				}
+
+				#formatDuration(duration) {
+					const h = Math.floor(this.currentTime / 3600)
+					const m = Math.floor((this.currentTime - 3600 * h) / 60)
+					const s = Math.floor((this.currentTime - 3600 * h - 60 * m))
+
+					return `${h}:${m}:${s}`
+				}
+			}
+
+			const app = new App({
+				header:       document.querySelector('header'),
+				fileExplorer: document.querySelector('section'),
+				video:        document.querySelector('#video'),
+				pdf:          document.querySelector('#pdf'),
+				notes:        document.querySelector('#notes')
+			})
+			
+			window.addEventListener('keydown', e => {
+				if (e.key == 'o' && e.ctrlKey) {
+					e.preventDefault()
+					app.selectRootDirectory()
+				}
+			})
+		</script>
+	</body>
+</html>
